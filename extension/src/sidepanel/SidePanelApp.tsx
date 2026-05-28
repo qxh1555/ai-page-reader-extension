@@ -8,8 +8,6 @@ const STORAGE_KEYS = {
   apiKey: "aiPageReader_apiKey",
   baseURL: "aiPageReader_baseURL",
   model: "aiPageReader_model",
-  useBackend: "aiPageReader_useBackend",
-  serverUrl: "aiPageReader_serverUrl",
   maxContext: "aiPageReader_maxContext",
 };
 
@@ -27,8 +25,6 @@ export function SidePanelApp() {
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState("https://api.deepseek.com");
   const [model, setModel] = useState("deepseek-chat");
-  const [useBackend, setUseBackend] = useState(false);
-  const [serverUrl, setServerUrl] = useState("http://localhost:3000");
   const [maxContextChars, setMaxContextChars] = useState(30000);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -39,10 +35,6 @@ export function SidePanelApp() {
       if (result[STORAGE_KEYS.apiKey]) setApiKey(result[STORAGE_KEYS.apiKey]);
       if (result[STORAGE_KEYS.baseURL]) setBaseURL(result[STORAGE_KEYS.baseURL]);
       if (result[STORAGE_KEYS.model]) setModel(result[STORAGE_KEYS.model]);
-      if (result[STORAGE_KEYS.useBackend] !== undefined)
-        setUseBackend(result[STORAGE_KEYS.useBackend]);
-      if (result[STORAGE_KEYS.serverUrl])
-        setServerUrl(result[STORAGE_KEYS.serverUrl]);
       if (result[STORAGE_KEYS.maxContext])
         setMaxContextChars(result[STORAGE_KEYS.maxContext]);
     });
@@ -91,55 +83,32 @@ export function SidePanelApp() {
           }
         : null;
 
-      let answer: string;
-
-      if (useBackend) {
-        const res = await fetch(`${serverUrl}/api/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            pageContext: truncatedContext,
-            messages: newMessages,
-            question,
-          }),
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `Server error: ${res.status}`);
-        }
-        const data = await res.json();
-        answer = data.answer;
-      } else {
-        if (!apiKey) {
-          throw new Error(
-            "API key not configured. Click the gear icon to set it in Settings."
-          );
-        }
-        answer = await callAIDirect(
-          truncatedContext,
-          newMessages,
-          question,
-          { apiKey, baseURL, model },
-          maxContextChars
+      if (!apiKey) {
+        throw new Error(
+          "API key not configured. Click the gear icon to set it in Settings."
         );
       }
+      const answer = await callAIDirect(
+        truncatedContext,
+        newMessages,
+        question,
+        { apiKey, baseURL, model },
+        maxContextChars
+      );
 
       const assistantMsg: ChatMessage = { role: "assistant", content: answer };
       setMessages([...newMessages, assistantMsg]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-        setError("Cannot connect. Check your network or the server URL.");
+        setError("Cannot connect. Check your network or the API Base URL.");
       } else {
         setError(msg);
       }
     } finally {
       setLoading(false);
     }
-  }, [
-    input, messages, pageContext, maxContextChars,
-    apiKey, baseURL, model, useBackend, serverUrl,
-  ]);
+  }, [input, messages, pageContext, maxContextChars, apiKey, baseURL, model]);
 
   const handleClear = useCallback(() => {
     setMessages([]);
@@ -178,76 +147,42 @@ export function SidePanelApp() {
       {showSettings && (
         <div style={styles.settingsPanel}>
           <div style={styles.settingGroup}>
-            <label style={styles.settingLabel}>Connection mode</label>
-            <select
-              value={useBackend ? "backend" : "direct"}
+            <label style={styles.settingLabel}>API Key</label>
+            <input
+              type="password"
+              value={apiKey}
               onChange={(e) => {
-                const v = e.target.value === "backend";
-                setUseBackend(v);
-                persist(STORAGE_KEYS.useBackend, v);
+                setApiKey(e.target.value);
+                persist(STORAGE_KEYS.apiKey, e.target.value);
               }}
-              style={styles.settingSelect}
-            >
-              <option value="direct">Direct API (no backend needed)</option>
-              <option value="backend">Proxy via backend server</option>
-            </select>
+              placeholder="sk-..."
+              style={styles.settingInput}
+            />
           </div>
-
-          {useBackend ? (
-            <div style={styles.settingGroup}>
-              <label style={styles.settingLabel}>Backend URL</label>
-              <input
-                type="text"
-                value={serverUrl}
-                onChange={(e) => {
-                  setServerUrl(e.target.value);
-                  persist(STORAGE_KEYS.serverUrl, e.target.value);
-                }}
-                style={styles.settingInput}
-              />
-            </div>
-          ) : (
-            <>
-              <div style={styles.settingGroup}>
-                <label style={styles.settingLabel}>API Key</label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => {
-                    setApiKey(e.target.value);
-                    persist(STORAGE_KEYS.apiKey, e.target.value);
-                  }}
-                  placeholder="sk-..."
-                  style={styles.settingInput}
-                />
-              </div>
-              <div style={styles.settingGroup}>
-                <label style={styles.settingLabel}>Base URL</label>
-                <input
-                  type="text"
-                  value={baseURL}
-                  onChange={(e) => {
-                    setBaseURL(e.target.value);
-                    persist(STORAGE_KEYS.baseURL, e.target.value);
-                  }}
-                  style={styles.settingInput}
-                />
-              </div>
-              <div style={styles.settingGroup}>
-                <label style={styles.settingLabel}>Model</label>
-                <input
-                  type="text"
-                  value={model}
-                  onChange={(e) => {
-                    setModel(e.target.value);
-                    persist(STORAGE_KEYS.model, e.target.value);
-                  }}
-                  style={styles.settingInput}
-                />
-              </div>
-            </>
-          )}
-
+          <div style={styles.settingGroup}>
+            <label style={styles.settingLabel}>Base URL</label>
+            <input
+              type="text"
+              value={baseURL}
+              onChange={(e) => {
+                setBaseURL(e.target.value);
+                persist(STORAGE_KEYS.baseURL, e.target.value);
+              }}
+              style={styles.settingInput}
+            />
+          </div>
+          <div style={styles.settingGroup}>
+            <label style={styles.settingLabel}>Model</label>
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => {
+                setModel(e.target.value);
+                persist(STORAGE_KEYS.model, e.target.value);
+              }}
+              style={styles.settingInput}
+            />
+          </div>
           <div style={styles.settingGroup}>
             <label style={styles.settingLabel}>Max context chars</label>
             <input
@@ -341,9 +276,7 @@ export function SidePanelApp() {
 
       {/* Privacy note */}
       <div style={styles.privacyNote}>
-        {useBackend
-          ? `Page content → ${serverUrl} → AI API`
-          : `Page content sent directly to ${baseURL}`}
+        Page content sent directly to {baseURL}
       </div>
 
       {/* Input */}
@@ -429,13 +362,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     border: "1px solid #ccc",
     borderRadius: 4,
-  },
-  settingSelect: {
-    padding: "4px 8px",
-    fontSize: 12,
-    border: "1px solid #ccc",
-    borderRadius: 4,
-    background: "#fff",
   },
   pageSection: {
     padding: "12px 16px",
