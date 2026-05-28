@@ -2,14 +2,98 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { PageContext, ChatMessage } from "../lib/pageTypes";
 import { extractPageContext } from "../lib/messaging";
 import { truncateMarkdown } from "../lib/truncate";
-import { callAIDirect } from "../lib/aiClient";
+import { callAIDirect, type ImageData, type ApiFormat } from "../lib/aiClient";
 
 const STORAGE_KEYS = {
   apiKey: "aiPageReader_apiKey",
   baseURL: "aiPageReader_baseURL",
   model: "aiPageReader_model",
+  apiFormat: "aiPageReader_apiFormat",
   maxContext: "aiPageReader_maxContext",
+  maxImages: "aiPageReader_maxImages",
 };
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB per image
+const DEFAULT_MAX_IMAGES = 5;
+
+const ALLOWED_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+]);
+
+function guessTypeFromURL(url: string): string | null {
+  try {
+    const path = new URL(url).pathname.toLowerCase();
+    if (path.endsWith(".png")) return "image/png";
+    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+    if (path.endsWith(".webp")) return "image/webp";
+    if (path.endsWith(".gif")) return "image/gif";
+  } catch {
+    // invalid URL
+  }
+  return null;
+}
+
+// Download images and convert to base64.
+// Uses blob.type (browser magic-byte detection) as primary media type —
+// more reliable than Content-Type header which servers may set incorrectly.
+async function downloadImages(
+  urls: { url: string; alt: string }[],
+  maxCount: number
+): Promise<ImageData[]> {
+  const results: ImageData[] = [];
+  for (const { url } of urls) {
+    if (results.length >= maxCount) break;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+
+      const blob = await res.blob();
+      if (blob.size > MAX_IMAGE_BYTES || blob.size === 0) continue;
+
+      // Primary: browser-detected type from magic bytes
+      let mediaType = blob.type.toLowerCase();
+
+      // Fallback: Content-Type header
+      if (!ALLOWED_TYPES.has(mediaType)) {
+        const ct = (res.headers.get("content-type") || "")
+          .split(";")[0]
+          .trim()
+          .toLowerCase();
+        if (ALLOWED_TYPES.has(ct)) mediaType = ct;
+      }
+
+      // Fallback: URL extension
+      if (!ALLOWED_TYPES.has(mediaType)) {
+        const guessed = guessTypeFromURL(url);
+        if (guessed) mediaType = guessed;
+      }
+
+      if (!ALLOWED_TYPES.has(mediaType)) continue;
+
+      // Read as base64 data URL, strip the prefix
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result as string;
+          const b64 = result.split(",")[1] || result;
+          resolve(b64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      if (!base64 || base64.length < 10) continue;
+
+      results.push({ url, base64, mediaType });
+    } catch {
+      // Skip (CORS, 404, etc.)
+    }
+  }
+  return results;
+}
 
 export function SidePanelApp() {
   const [pageContext, setPageContext] = useState<PageContext | null>(null);
@@ -20,12 +104,15 @@ export function SidePanelApp() {
   const [showPreview, setShowPreview] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [loadingImages, setLoadingImages] = useState(false);
 
   // Config state
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState("https://api.deepseek.com");
   const [model, setModel] = useState("deepseek-chat");
+  const [apiFormat, setApiFormat] = useState<ApiFormat>("anthropic");
   const [maxContextChars, setMaxContextChars] = useState(30000);
+  const [maxImages, setMaxImages] = useState(DEFAULT_MAX_IMAGES);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -35,8 +122,12 @@ export function SidePanelApp() {
       if (result[STORAGE_KEYS.apiKey]) setApiKey(result[STORAGE_KEYS.apiKey]);
       if (result[STORAGE_KEYS.baseURL]) setBaseURL(result[STORAGE_KEYS.baseURL]);
       if (result[STORAGE_KEYS.model]) setModel(result[STORAGE_KEYS.model]);
+      if (result[STORAGE_KEYS.apiFormat])
+        setApiFormat(result[STORAGE_KEYS.apiFormat] as ApiFormat);
       if (result[STORAGE_KEYS.maxContext])
         setMaxContextChars(result[STORAGE_KEYS.maxContext]);
+      if (result[STORAGE_KEYS.maxImages] !== undefined)
+        setMaxImages(result[STORAGE_KEYS.maxImages]);
     });
   }, []);
 
@@ -44,10 +135,12 @@ export function SidePanelApp() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Persist config changes
-  const persist = useCallback((key: string, value: string | number | boolean) => {
-    chrome.storage.local.set({ [key]: value });
-  }, []);
+  const persist = useCallback(
+    (key: string, value: string | number | boolean) => {
+      chrome.storage.local.set({ [key]: value });
+    },
+    []
+  );
 
   const handleExtract = useCallback(async () => {
     setExtracting(true);
@@ -74,6 +167,7 @@ export function SidePanelApp() {
     setMessages(newMessages);
 
     setLoading(true);
+    setLoadingImages(true);
     try {
       const truncatedContext = pageContext
         ? {
@@ -88,12 +182,22 @@ export function SidePanelApp() {
           "API key not configured. Click the gear icon to set it in Settings."
         );
       }
+
+      // Download images from page
+      setLoadingImages(true);
+      const images = await downloadImages(
+        pageContext?.images || [],
+        maxImages
+      );
+      setLoadingImages(false);
+
       const answer = await callAIDirect(
         truncatedContext,
         newMessages,
         question,
-        { apiKey, baseURL, model },
-        maxContextChars
+        { apiKey, baseURL, model, apiFormat },
+        maxContextChars,
+        images
       );
 
       const assistantMsg: ChatMessage = { role: "assistant", content: answer };
@@ -107,8 +211,9 @@ export function SidePanelApp() {
       }
     } finally {
       setLoading(false);
+      setLoadingImages(false);
     }
-  }, [input, messages, pageContext, maxContextChars, apiKey, baseURL, model]);
+  }, [input, messages, pageContext, maxContextChars, apiKey, baseURL, model, apiFormat, maxImages]);
 
   const handleClear = useCallback(() => {
     setMessages([]);
@@ -128,6 +233,8 @@ export function SidePanelApp() {
   const previewMarkdown = pageContext
     ? truncateMarkdown(pageContext.markdown, 5000)
     : "";
+
+  const imageCount = pageContext?.images?.length || 0;
 
   return (
     <div style={styles.container}>
@@ -184,6 +291,21 @@ export function SidePanelApp() {
             />
           </div>
           <div style={styles.settingGroup}>
+            <label style={styles.settingLabel}>API Format</label>
+            <select
+              value={apiFormat}
+              onChange={(e) => {
+                const v = e.target.value as ApiFormat;
+                setApiFormat(v);
+                persist(STORAGE_KEYS.apiFormat, v);
+              }}
+              style={styles.settingSelect}
+            >
+              <option value="anthropic">Anthropic Messages</option>
+              <option value="openai">OpenAI Compatible</option>
+            </select>
+          </div>
+          <div style={styles.settingGroup}>
             <label style={styles.settingLabel}>Max context chars</label>
             <input
               type="number"
@@ -197,6 +319,20 @@ export function SidePanelApp() {
               max={200000}
             />
           </div>
+          <div style={styles.settingGroup}>
+            <label style={styles.settingLabel}>Max images</label>
+            <input
+              type="number"
+              value={maxImages}
+              onChange={(e) => {
+                setMaxImages(Number(e.target.value));
+                persist(STORAGE_KEYS.maxImages, Number(e.target.value));
+              }}
+              style={{ ...styles.settingInput, width: 80 }}
+              min={0}
+              max={20}
+            />
+          </div>
         </div>
       )}
 
@@ -206,6 +342,11 @@ export function SidePanelApp() {
           <>
             <div style={styles.pageTitle}>{pageContext.title}</div>
             <div style={styles.pageUrl}>{pageContext.url}</div>
+            {imageCount > 0 && (
+              <div style={styles.imageInfo}>
+                {imageCount} image(s) found (up to {maxImages} will be sent)
+              </div>
+            )}
           </>
         ) : (
           <div style={styles.noPageText}>
@@ -232,10 +373,29 @@ export function SidePanelApp() {
             onClick={() => setShowPreview(!showPreview)}
             style={styles.previewToggle}
           >
-            {showPreview ? "Hide Preview" : "Show Preview"} (Markdown)
+            {showPreview ? "Hide Preview" : "Show Preview"} (Markdown
+            {imageCount > 0 ? ` + ${imageCount} images` : ""})
           </button>
           {showPreview && (
-            <pre style={styles.previewContent}>{previewMarkdown}</pre>
+            <>
+              {imageCount > 0 && (
+                <div style={styles.imagePreviewGrid}>
+                  {pageContext.images.slice(0, maxImages).map((img, i) => (
+                    <div key={i} style={styles.imageThumbWrap}>
+                      <img
+                        src={img.url}
+                        alt={img.alt || `Image ${i + 1}`}
+                        style={styles.imageThumb}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+              <pre style={styles.previewContent}>{previewMarkdown}</pre>
+            </>
           )}
         </div>
       )}
@@ -265,7 +425,9 @@ export function SidePanelApp() {
         {loading && (
           <div style={{ ...styles.message, background: "#f5f5f5" }}>
             <div style={styles.messageRole}>AI</div>
-            <div style={styles.messageContent}>Thinking...</div>
+            <div style={styles.messageContent}>
+              {loadingImages ? "Downloading images..." : "Thinking..."}
+            </div>
           </div>
         )}
         <div ref={chatEndRef} />
@@ -276,7 +438,8 @@ export function SidePanelApp() {
 
       {/* Privacy note */}
       <div style={styles.privacyNote}>
-        Page content sent directly to {baseURL}
+        Page content{maxImages > 0 ? " + images" : ""} sent directly to{" "}
+        {baseURL}
       </div>
 
       {/* Input */}
@@ -363,75 +526,173 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #ccc",
     borderRadius: 4,
   },
+  settingSelect: {
+    padding: "4px 8px",
+    fontSize: 12,
+    border: "1px solid #ccc",
+    borderRadius: 4,
+    background: "#fff",
+  },
   pageSection: {
     padding: "12px 16px",
     borderBottom: "1px solid #e0e0e0",
   },
   pageTitle: {
-    fontSize: 14, fontWeight: 600, marginBottom: 4, wordBreak: "break-word",
+    fontSize: 14,
+    fontWeight: 600,
+    marginBottom: 4,
+    wordBreak: "break-word",
   },
   pageUrl: {
-    fontSize: 11, color: "#888", wordBreak: "break-all", marginBottom: 8,
+    fontSize: 11,
+    color: "#888",
+    wordBreak: "break-all",
+    marginBottom: 4,
+  },
+  imageInfo: {
+    fontSize: 11,
+    color: "#1976d2",
+    marginBottom: 8,
   },
   noPageText: { fontSize: 13, color: "#999", marginBottom: 8 },
   primaryBtn: {
-    padding: "6px 14px", fontSize: 13, background: "#1976d2",
-    color: "#fff", border: "none", borderRadius: 4, cursor: "pointer",
+    padding: "6px 14px",
+    fontSize: 13,
+    background: "#1976d2",
+    color: "#fff",
+    border: "none",
+    borderRadius: 4,
+    cursor: "pointer",
   },
   previewSection: {
-    padding: "8px 16px", borderBottom: "1px solid #e0e0e0",
+    padding: "8px 16px",
+    borderBottom: "1px solid #e0e0e0",
   },
   previewToggle: {
-    fontSize: 12, background: "none", border: "none",
-    color: "#1976d2", cursor: "pointer", padding: 0, marginBottom: 8,
+    fontSize: 12,
+    background: "none",
+    border: "none",
+    color: "#1976d2",
+    cursor: "pointer",
+    padding: 0,
+    marginBottom: 8,
   },
   previewContent: {
-    fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word",
-    maxHeight: 300, overflow: "auto", background: "#fafafa",
-    padding: 8, borderRadius: 4, border: "1px solid #eee",
+    fontSize: 11,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    maxHeight: 200,
+    overflow: "auto",
+    background: "#fafafa",
+    padding: 8,
+    borderRadius: 4,
+    border: "1px solid #eee",
+  },
+  imagePreviewGrid: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 4,
+    marginBottom: 8,
+    maxHeight: 150,
+    overflow: "auto",
+  },
+  imageThumbWrap: {
+    width: 80,
+    height: 80,
+    overflow: "hidden",
+    borderRadius: 4,
+    border: "1px solid #eee",
+    background: "#f0f0f0",
+    flexShrink: 0,
+  },
+  imageThumb: {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
   },
   chatSection: {
-    flex: 1, overflow: "auto", padding: "12px 16px",
-    display: "flex", flexDirection: "column", gap: 8,
+    flex: 1,
+    overflow: "auto",
+    padding: "12px 16px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
   },
   chatPlaceholder: {
-    color: "#999", fontSize: 13, textAlign: "center", marginTop: 40,
+    color: "#999",
+    fontSize: 13,
+    textAlign: "center",
+    marginTop: 40,
   },
   message: {
-    maxWidth: "85%", padding: "8px 12px", borderRadius: 8,
+    maxWidth: "85%",
+    padding: "8px 12px",
+    borderRadius: 8,
     alignSelf: "flex-start",
   },
   messageRole: {
-    fontSize: 11, fontWeight: 600, marginBottom: 4, color: "#666",
+    fontSize: 11,
+    fontWeight: 600,
+    marginBottom: 4,
+    color: "#666",
   },
   messageContent: {
-    fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
+    fontSize: 13,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
     lineHeight: 1.5,
   },
   error: {
-    margin: "8px 16px", padding: "8px 12px",
-    background: "#ffebee", color: "#c62828", borderRadius: 4, fontSize: 12,
+    margin: "8px 16px",
+    padding: "8px 12px",
+    background: "#ffebee",
+    color: "#c62828",
+    borderRadius: 4,
+    fontSize: 12,
   },
   privacyNote: {
-    padding: "6px 16px", fontSize: 10, color: "#aaa", textAlign: "center",
+    padding: "6px 16px",
+    fontSize: 10,
+    color: "#aaa",
+    textAlign: "center",
   },
   inputSection: {
-    padding: "12px 16px", borderTop: "1px solid #e0e0e0", background: "#fafafa",
+    padding: "12px 16px",
+    borderTop: "1px solid #e0e0e0",
+    background: "#fafafa",
   },
   textarea: {
-    width: "100%", padding: 8, fontSize: 13, border: "1px solid #ccc",
-    borderRadius: 4, resize: "none", boxSizing: "border-box",
+    width: "100%",
+    padding: 8,
+    fontSize: 13,
+    border: "1px solid #ccc",
+    borderRadius: 4,
+    resize: "none",
+    boxSizing: "border-box",
     fontFamily: "inherit",
   },
   inputButtons: {
-    display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end",
+    display: "flex",
+    gap: 8,
+    marginTop: 8,
+    justifyContent: "flex-end",
   },
   sendBtn: {
-    padding: "6px 16px", fontSize: 13, background: "#1976d2",
-    color: "#fff", border: "none", borderRadius: 4, cursor: "pointer",
+    padding: "6px 16px",
+    fontSize: 13,
+    background: "#1976d2",
+    color: "#fff",
+    border: "none",
+    borderRadius: 4,
+    cursor: "pointer",
   },
   clearBtn: {
-    padding: "6px 12px", fontSize: 12, background: "transparent",
-    color: "#888", border: "1px solid #ccc", borderRadius: 4, cursor: "pointer",
+    padding: "6px 12px",
+    fontSize: 12,
+    background: "transparent",
+    color: "#888",
+    border: "1px solid #ccc",
+    borderRadius: 4,
+    cursor: "pointer",
   },
 };

@@ -1,6 +1,49 @@
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 
+interface ImageInfo {
+  url: string;
+  alt: string;
+  width: number;
+  height: number;
+}
+
+const MAX_IMAGES = 20;
+
+function extractImages(): ImageInfo[] {
+  const images: ImageInfo[] = [];
+  const seen = new Set<string>();
+
+  for (const img of document.querySelectorAll("img")) {
+    if (images.length >= MAX_IMAGES) break;
+
+    const src = img.src || img.getAttribute("data-src") || "";
+    if (
+      !src ||
+      src.startsWith("data:") ||
+      seen.has(src) ||
+      src.includes("avatar") ||
+      src.includes("icon")
+    )
+      continue;
+
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+
+    // Skip tiny images (likely tracking pixels, icons, spacers)
+    if ((w > 0 && w < 80) || (h > 0 && h < 80)) continue;
+
+    seen.add(src);
+    images.push({
+      url: src,
+      alt: img.alt || "",
+      width: w,
+      height: h,
+    });
+  }
+  return images;
+}
+
 (function () {
   try {
     const documentClone = document.cloneNode(true) as Document;
@@ -14,6 +57,7 @@ import TurndownService from "turndown";
       byline: string;
       markdown: string;
       plainText: string;
+      images: ImageInfo[];
     };
 
     if (article) {
@@ -31,9 +75,9 @@ import TurndownService from "turndown";
         byline: article.byline || "",
         markdown,
         plainText,
+        images: extractImages(),
       };
     } else {
-      // Fallback to innerText
       const bodyText = document.body.innerText || "";
       const td = new TurndownService({
         headingStyle: "atx",
@@ -48,12 +92,12 @@ import TurndownService from "turndown";
         byline: "",
         markdown,
         plainText: bodyText,
+        images: extractImages(),
       };
     }
 
     return result;
   } catch (err) {
-    // Last-resort fallback
     return {
       title: document.title,
       url: window.location.href,
@@ -61,6 +105,7 @@ import TurndownService from "turndown";
       byline: "",
       markdown: document.body.innerText || "",
       plainText: document.body.innerText || "",
+      images: [],
     };
   }
 })();

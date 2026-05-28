@@ -1,5 +1,12 @@
 /// <reference types="chrome" />
 
+export interface ImageInfo {
+  url: string;
+  alt: string;
+  width: number;
+  height: number;
+}
+
 export interface PageContext {
   title: string;
   url: string;
@@ -7,6 +14,7 @@ export interface PageContext {
   byline: string;
   markdown: string;
   plainText: string;
+  images: ImageInfo[];
 }
 
 export interface ChatMessage {
