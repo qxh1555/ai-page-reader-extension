@@ -1,0 +1,1 @@
+export { truncateMarkdown } from "./truncate";

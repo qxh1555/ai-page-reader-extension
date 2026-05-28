@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "AI Page Reader",
+  "version": "0.1.0",
+  "description": "Read web pages and ask AI questions about them in the side panel.",
+  "permissions": ["activeTab", "scripting", "sidePanel", "storage"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_title": "AI Page Reader"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
