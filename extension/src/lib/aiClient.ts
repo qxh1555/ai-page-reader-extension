@@ -47,8 +47,14 @@ async function callAnthropicAPI(
   // Build user content: images + text
   const userContent: Record<string, unknown>[] = [];
 
+  let imgIdx = 0;
   for (const img of images) {
     if (!img.base64 || !img.mediaType) continue;
+    imgIdx++;
+    userContent.push({
+      type: "text",
+      text: `[Image ${imgIdx}]`,
+    });
     userContent.push({
       type: "image",
       source: {
@@ -60,8 +66,8 @@ async function callAnthropicAPI(
   }
 
   const questionText =
-    images.length > 0
-      ? `The above ${images.length} image(s) are from the current web page. Use them as visual context when answering. ${question}`
+    imgIdx > 0
+      ? `The above ${imgIdx} image(s) (labeled [Image 1] to [Image ${imgIdx}]) are from the current web page. Use them as visual context when answering. You can reference specific images by their number. ${question}`
       : question;
 
   userContent.push({ type: "text", text: questionText });
@@ -114,8 +120,14 @@ async function callOpenAIAPI(
   // Build user content: images + text
   const userContent: Record<string, unknown>[] = [];
 
+  let imgIdx = 0;
   for (const img of images) {
     if (!img.base64 || !img.mediaType) continue;
+    imgIdx++;
+    userContent.push({
+      type: "text",
+      text: `[Image ${imgIdx}]`,
+    });
     userContent.push({
       type: "image_url",
       image_url: {
@@ -125,8 +137,8 @@ async function callOpenAIAPI(
   }
 
   const questionText =
-    images.length > 0
-      ? `The above ${images.length} image(s) are from the current web page. Use them as visual context when answering. ${question}`
+    imgIdx > 0
+      ? `The above ${imgIdx} image(s) (labeled [Image 1] to [Image ${imgIdx}]) are from the current web page. Use them as visual context when answering. You can reference specific images by their number. ${question}`
       : question;
 
   userContent.push({ type: "text", text: questionText });

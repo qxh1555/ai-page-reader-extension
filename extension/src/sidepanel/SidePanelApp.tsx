@@ -105,6 +105,7 @@ export function SidePanelApp() {
   const [showSettings, setShowSettings] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [loadingImages, setLoadingImages] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   // Config state
   const [apiKey, setApiKey] = useState("");
@@ -381,13 +382,22 @@ export function SidePanelApp() {
               {imageCount > 0 && (
                 <div style={styles.imagePreviewGrid}>
                   {pageContext.images.slice(0, maxImages).map((img, i) => (
-                    <div key={i} style={styles.imageThumbWrap}>
+                    <div
+                      key={i}
+                      style={styles.imageThumbWrap}
+                      title={`Image ${i + 1}: ${img.alt || ""}`}
+                      onClick={() => setLightboxUrl(img.url)}
+                    >
+                      <span style={styles.imageNumber}>{i + 1}</span>
                       <img
                         src={img.url}
                         alt={img.alt || `Image ${i + 1}`}
                         style={styles.imageThumb}
                         onError={(e) => {
                           (e.target as HTMLImageElement).style.display = "none";
+                          ((e.target as HTMLImageElement)
+                            .previousSibling as HTMLElement).style.display =
+                            "none";
                         }}
                       />
                     </div>
@@ -470,6 +480,23 @@ export function SidePanelApp() {
           </button>
         </div>
       </div>
+
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div style={styles.lightbox} onClick={() => setLightboxUrl(null)}>
+          <button
+            style={styles.lightboxClose}
+            onClick={() => setLightboxUrl(null)}
+          >
+            ✕
+          </button>
+          <img
+            src={lightboxUrl}
+            style={styles.lightboxImg}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -604,11 +631,64 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #eee",
     background: "#f0f0f0",
     flexShrink: 0,
+    cursor: "pointer",
+    position: "relative",
+  },
+  imageNumber: {
+    position: "absolute",
+    top: 2,
+    left: 2,
+    background: "rgba(0,0,0,0.6)",
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: 600,
+    width: 18,
+    height: 18,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 3,
+    zIndex: 1,
   },
   imageThumb: {
     width: "100%",
     height: "100%",
     objectFit: "cover",
+  },
+  lightbox: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: "rgba(0,0,0,0.85)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 9999,
+    cursor: "pointer",
+  },
+  lightboxClose: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    background: "rgba(255,255,255,0.2)",
+    color: "#fff",
+    border: "none",
+    fontSize: 20,
+    width: 36,
+    height: 36,
+    borderRadius: "50%",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  lightboxImg: {
+    maxWidth: "95%",
+    maxHeight: "95%",
+    objectFit: "contain",
+    cursor: "default",
   },
   chatSection: {
     flex: 1,
