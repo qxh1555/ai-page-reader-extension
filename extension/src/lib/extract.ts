@@ -5,49 +5,78 @@ import type { PageContext, ImageInfo } from "./pageTypes";
 export interface RawExtract {
   html: string;
   url: string;
+  title: string;
+  bodyText: string;
+  mainText: string;
   images: ImageInfo[];
 }
 
-export function processRawExtract(raw: RawExtract): PageContext {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(raw.html, "text/html");
-  const reader = new Readability(doc);
-  const article = reader.parse();
+export type ExtractMode = "auto" | "readability" | "fullpage" | "plaintext";
 
-  if (article) {
-    const td = new TurndownService({
-      headingStyle: "atx",
-      codeBlockStyle: "fenced",
-    });
-    const markdown = td.turndown(article.content || "");
-    const plainText = article.textContent || "";
-
-    return {
-      title: article.title || doc.title,
-      url: raw.url,
-      excerpt: article.excerpt || "",
-      byline: article.byline || "",
-      markdown,
-      plainText,
-      images: raw.images,
-    };
-  }
-
-  // Fallback: use full body text
-  const td = new TurndownService({
+function makeTurndown(): TurndownService {
+  return new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
   });
-  const markdown = td.turndown(doc.body.innerHTML);
-  const plainText = doc.body.innerText || "";
+}
 
-  return {
-    title: doc.title,
-    url: raw.url,
-    excerpt: plainText.slice(0, 300).trim(),
-    byline: "",
-    markdown,
-    plainText,
-    images: raw.images,
-  };
+export function processRawExtract(raw: RawExtract, mode: ExtractMode): PageContext {
+  const mkCtx = (title: string, md: string, text: string, ex?: string, bl?: string): PageContext => ({
+    title, url: raw.url, excerpt: ex || "", byline: bl || "",
+    markdown: md, plainText: text, images: raw.images,
+  });
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(raw.html, "text/html");
+
+  switch (mode) {
+    // ── Readability only ──────────────────────────────────
+    case "readability": {
+      const article = new Readability(doc.cloneNode(true) as Document).parse();
+      if (article) {
+        const td = makeTurndown();
+        return mkCtx(
+          article.title || raw.title,
+          td.turndown(article.content || ""),
+          article.textContent || "",
+          article.excerpt || "",
+          article.byline || ""
+        );
+      }
+      // Fall through to fullpage
+      return processRawExtract(raw, "fullpage");
+    }
+
+    // ── Full page (de-noise + Markdown) ───────────────────
+    case "fullpage": {
+      const td = makeTurndown();
+      const md = td.turndown(doc.body.innerHTML);
+      return mkCtx(raw.title, md, doc.body.textContent || "");
+    }
+
+    // ── Plain text (live DOM direct extract) ──────────────
+    case "plaintext": {
+      const text = raw.mainText || raw.bodyText || "";
+      return mkCtx(raw.title, text, text);
+    }
+
+    // ── Auto (smart) ──────────────────────────────────────
+    case "auto":
+    default: {
+      // Try Readability first
+      const article = new Readability(doc.cloneNode(true) as Document).parse();
+      if (article && (article.textContent?.length || 0) >= 500) {
+        const td = makeTurndown();
+        return mkCtx(
+          article.title || raw.title,
+          td.turndown(article.content || ""),
+          article.textContent || "",
+          article.excerpt || "",
+          article.byline || ""
+        );
+      }
+      // Readability gave too little → fall back to fullpage
+      return processRawExtract(raw, "fullpage");
+    }
+  }
 }

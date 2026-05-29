@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { PageContext, ChatMessage } from "../lib/pageTypes";
 import { extractPageContext } from "../lib/messaging";
+import type { ExtractMode } from "../lib/extract";
 import { truncateMarkdown } from "../lib/truncate";
 import { callAIDirect, type ImageData, type ApiFormat } from "../lib/aiClient";
 
@@ -9,6 +10,7 @@ const STORAGE_KEYS = {
   baseURL: "aiPageReader_baseURL",
   model: "aiPageReader_model",
   apiFormat: "aiPageReader_apiFormat",
+  extractMode: "aiPageReader_extractMode",
   maxContext: "aiPageReader_maxContext",
   maxImages: "aiPageReader_maxImages",
 };
@@ -112,6 +114,7 @@ export function SidePanelApp() {
   const [baseURL, setBaseURL] = useState("https://api.deepseek.com");
   const [model, setModel] = useState("deepseek-chat");
   const [apiFormat, setApiFormat] = useState<ApiFormat>("anthropic");
+  const [extractMode, setExtractMode] = useState<ExtractMode>("auto");
   const [maxContextChars, setMaxContextChars] = useState(30000);
   const [maxImages, setMaxImages] = useState(DEFAULT_MAX_IMAGES);
 
@@ -125,6 +128,8 @@ export function SidePanelApp() {
       if (result[STORAGE_KEYS.model]) setModel(result[STORAGE_KEYS.model]);
       if (result[STORAGE_KEYS.apiFormat])
         setApiFormat(result[STORAGE_KEYS.apiFormat] as ApiFormat);
+      if (result[STORAGE_KEYS.extractMode])
+        setExtractMode(result[STORAGE_KEYS.extractMode] as ExtractMode);
       if (result[STORAGE_KEYS.maxContext])
         setMaxContextChars(result[STORAGE_KEYS.maxContext]);
       if (result[STORAGE_KEYS.maxImages] !== undefined)
@@ -147,7 +152,7 @@ export function SidePanelApp() {
     setExtracting(true);
     setError("");
     try {
-      const ctx = await extractPageContext();
+      const ctx = await extractPageContext(extractMode);
       setPageContext(ctx);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to extract page");
@@ -155,7 +160,7 @@ export function SidePanelApp() {
     } finally {
       setExtracting(false);
     }
-  }, []);
+  }, [extractMode]);
 
   const handleSend = useCallback(async () => {
     const question = input.trim();
@@ -231,8 +236,9 @@ export function SidePanelApp() {
     [handleSend]
   );
 
+  const previewMaxChars = 50000;
   const previewMarkdown = pageContext
-    ? truncateMarkdown(pageContext.markdown, 5000)
+    ? truncateMarkdown(pageContext.markdown, previewMaxChars)
     : "";
 
   const imageCount = pageContext?.images?.length || 0;
@@ -307,6 +313,23 @@ export function SidePanelApp() {
             </select>
           </div>
           <div style={styles.settingGroup}>
+            <label style={styles.settingLabel}>Extract mode</label>
+            <select
+              value={extractMode}
+              onChange={(e) => {
+                const v = e.target.value as ExtractMode;
+                setExtractMode(v);
+                persist(STORAGE_KEYS.extractMode, v);
+              }}
+              style={styles.settingSelect}
+            >
+              <option value="auto">Auto (smart)</option>
+              <option value="readability">Readability</option>
+              <option value="fullpage">Full page</option>
+              <option value="plaintext">Plain text</option>
+            </select>
+          </div>
+          <div style={styles.settingGroup}>
             <label style={styles.settingLabel}>Max context chars</label>
             <input
               type="number"
@@ -375,6 +398,9 @@ export function SidePanelApp() {
             style={styles.previewToggle}
           >
             {showPreview ? "Hide Preview" : "Show Preview"} (Markdown
+            {pageContext.markdown.length > 0
+              ? ` ${pageContext.markdown.length.toLocaleString()} chars`
+              : ""}
             {imageCount > 0 ? ` + ${imageCount} images` : ""})
           </button>
           {showPreview && (
@@ -608,7 +634,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
-    maxHeight: 200,
+    maxHeight: 500,
     overflow: "auto",
     background: "#fafafa",
     padding: 8,
@@ -661,7 +687,7 @@ const styles: Record<string, React.CSSProperties> = {
     left: 0,
     right: 0,
     bottom: 0,
-    background: "rgba(0,0,0,0.85)",
+    background: "rgba(0,0,0,0.92)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -672,23 +698,27 @@ const styles: Record<string, React.CSSProperties> = {
     position: "absolute",
     top: 12,
     right: 12,
-    background: "rgba(255,255,255,0.2)",
+    background: "rgba(255,255,255,0.25)",
     color: "#fff",
     border: "none",
-    fontSize: 20,
-    width: 36,
-    height: 36,
+    fontSize: 22,
+    width: 40,
+    height: 40,
     borderRadius: "50%",
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    zIndex: 1,
   },
   lightboxImg: {
-    maxWidth: "95%",
-    maxHeight: "95%",
+    maxWidth: "90%",
+    maxHeight: "90%",
     objectFit: "contain",
     cursor: "default",
+    background: "#fff",
+    borderRadius: 4,
+    padding: 4,
   },
   chatSection: {
     flex: 1,

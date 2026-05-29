@@ -1,7 +1,7 @@
 import type { PageContext } from "./pageTypes";
-import { processRawExtract, type RawExtract } from "./extract";
+import { processRawExtract, type RawExtract, type ExtractMode } from "./extract";
 
-export async function extractPageContext(): Promise<PageContext> {
+export async function extractPageContext(mode: ExtractMode): Promise<PageContext> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0];
   if (!tab?.id) {
@@ -28,7 +28,7 @@ export async function extractPageContext(): Promise<PageContext> {
 
   const raw = results?.[0]?.result as RawExtract | undefined;
   if (raw) {
-    return processRawExtract(raw);
+    return processRawExtract(raw, mode);
   }
 
   const errorMsg =
