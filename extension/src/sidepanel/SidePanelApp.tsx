@@ -4,6 +4,14 @@ import { extractPageContext } from "../lib/messaging";
 import type { ExtractMode } from "../lib/extract";
 import { truncateMarkdown } from "../lib/truncate";
 import { callAIDirect, type ImageData, type ApiFormat } from "../lib/aiClient";
+import { renderMarkdown } from "../lib/markdown";
+import {
+  loadAllHistory,
+  loadHistory,
+  saveHistory,
+  deleteHistory,
+  type HistoryEntry,
+} from "../lib/history";
 
 const STORAGE_KEYS = {
   apiKey: "aiPageReader_apiKey",
@@ -105,15 +113,18 @@ export function SidePanelApp() {
   const [error, setError] = useState("");
   const [showPreview, setShowPreview] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [loadingImages, setLoadingImages] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [historyList, setHistoryList] = useState<HistoryEntry[]>([]);
+  const [restoredMsg, setRestoredMsg] = useState("");
 
   // Config state
   const [apiKey, setApiKey] = useState("");
-  const [baseURL, setBaseURL] = useState("https://api.deepseek.com");
-  const [model, setModel] = useState("deepseek-chat");
-  const [apiFormat, setApiFormat] = useState<ApiFormat>("anthropic");
+  const [baseURL, setBaseURL] = useState("https://dashscope.aliyuncs.com/compatible-mode/v1");
+  const [model, setModel] = useState("qwen3.6-plus");
+  const [apiFormat, setApiFormat] = useState<ApiFormat>("openai");
   const [extractMode, setExtractMode] = useState<ExtractMode>("auto");
   const [maxContextChars, setMaxContextChars] = useState(30000);
   const [maxImages, setMaxImages] = useState(DEFAULT_MAX_IMAGES);
@@ -141,6 +152,21 @@ export function SidePanelApp() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Save conversation to history whenever messages change
+  useEffect(() => {
+    if (pageContext && messages.length > 0) {
+      saveHistory({
+        url: pageContext.url,
+        title: pageContext.title,
+        pageContext,
+        messages,
+        updatedAt: Date.now(),
+      });
+      // Refresh history list
+      loadAllHistory().then(setHistoryList);
+    }
+  }, [messages, pageContext]);
+
   const persist = useCallback(
     (key: string, value: string | number | boolean) => {
       chrome.storage.local.set({ [key]: value });
@@ -151,9 +177,22 @@ export function SidePanelApp() {
   const handleExtract = useCallback(async () => {
     setExtracting(true);
     setError("");
+    setRestoredMsg("");
     try {
       const ctx = await extractPageContext(extractMode);
-      setPageContext(ctx);
+
+      // Check if we have a previous conversation for this page
+      const existing = await loadHistory(ctx.url);
+      if (existing && existing.messages.length > 0) {
+        setPageContext(existing.pageContext);
+        setMessages(existing.messages);
+        setRestoredMsg(
+          `Restored previous session (${existing.messages.length} messages)`
+        );
+      } else {
+        setPageContext(ctx);
+        setMessages([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to extract page");
       setPageContext(null);
@@ -174,6 +213,12 @@ export function SidePanelApp() {
 
     setLoading(true);
     setLoadingImages(true);
+
+    // Add a placeholder assistant message that will be filled by streaming
+    const assistantPlaceholder: ChatMessage = { role: "assistant", content: "" };
+    const messagesWithPlaceholder = [...newMessages, assistantPlaceholder];
+    setMessages(messagesWithPlaceholder);
+
     try {
       const truncatedContext = pageContext
         ? {
@@ -190,24 +235,34 @@ export function SidePanelApp() {
       }
 
       // Download images from page
-      setLoadingImages(true);
       const images = await downloadImages(
         pageContext?.images || [],
         maxImages
       );
       setLoadingImages(false);
 
-      const answer = await callAIDirect(
+      await callAIDirect(
         truncatedContext,
         newMessages,
         question,
         { apiKey, baseURL, model, apiFormat },
         maxContextChars,
-        images
+        images,
+        // Streaming callback: update the last message incrementally
+        (chunk: string) => {
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last && last.role === "assistant") {
+              updated[updated.length - 1] = {
+                ...last,
+                content: last.content + chunk,
+              };
+            }
+            return updated;
+          });
+        }
       );
-
-      const assistantMsg: ChatMessage = { role: "assistant", content: answer };
-      setMessages([...newMessages, assistantMsg]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
@@ -247,15 +302,94 @@ export function SidePanelApp() {
     <div style={styles.container}>
       {/* Header */}
       <div style={styles.header}>
-        <h1 style={styles.title}>AI Page Reader</h1>
-        <button
-          onClick={() => setShowSettings(!showSettings)}
-          style={styles.settingsBtn}
-          title="Settings"
-        >
-          {showSettings ? "✕" : "⚙"}
-        </button>
+        <h1 style={styles.title}>Web Chat</h1>
+        <div style={styles.headerBtns}>
+          <button
+            onClick={() => {
+              setShowHistory(!showHistory);
+              setShowSettings(false);
+              loadAllHistory().then(setHistoryList);
+            }}
+            style={{
+              ...styles.settingsBtn,
+              background: showHistory ? "#e3f2fd" : undefined,
+            }}
+            title="History"
+          >
+            🕓
+          </button>
+          <button
+            onClick={() => {
+              setShowSettings(!showSettings);
+              setShowHistory(false);
+            }}
+            style={{
+              ...styles.settingsBtn,
+              background: showSettings ? "#e3f2fd" : undefined,
+            }}
+            title="Settings"
+          >
+            {showSettings ? "✕" : "⚙"}
+          </button>
+        </div>
       </div>
+
+      {/* History panel */}
+      {showHistory && (
+        <div style={styles.historyPanel}>
+          <div style={styles.historyTitle}>
+            Saved Conversations ({historyList.length})
+          </div>
+          {historyList.length === 0 && (
+            <div style={styles.historyEmpty}>
+              No saved conversations yet. Chat history is saved automatically.
+            </div>
+          )}
+          {historyList.slice(0, 20).map((entry) => (
+            <div
+              key={entry.url}
+              style={{
+                ...styles.historyItem,
+                background:
+                  pageContext?.url === entry.url ? "#e3f2fd" : undefined,
+              }}
+            >
+              <div
+                style={styles.historyItemMain}
+                onClick={async () => {
+                  setPageContext(entry.pageContext);
+                  setMessages(entry.messages);
+                  setShowHistory(false);
+                  setRestoredMsg(
+                    `Restored: ${entry.messages.length} messages from ${new Date(entry.updatedAt).toLocaleString()}`
+                  );
+                }}
+              >
+                <div style={styles.historyItemTitle}>{entry.title}</div>
+                <div style={styles.historyItemUrl}>{entry.url}</div>
+                <div style={styles.historyItemMeta}>
+                  {entry.messages.length} messages ·{" "}
+                  {new Date(entry.updatedAt).toLocaleDateString()}
+                </div>
+              </div>
+              <button
+                style={styles.historyDelete}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  await deleteHistory(entry.url);
+                  loadAllHistory().then(setHistoryList);
+                  if (pageContext?.url === entry.url) {
+                    setMessages([]);
+                  }
+                }}
+                title="Delete"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Settings panel */}
       {showSettings && (
@@ -371,6 +505,9 @@ export function SidePanelApp() {
                 {imageCount} image(s) found (up to {maxImages} will be sent)
               </div>
             )}
+            {restoredMsg && (
+              <div style={styles.restoredMsg}>{restoredMsg}</div>
+            )}
           </>
         ) : (
           <div style={styles.noPageText}>
@@ -430,7 +567,13 @@ export function SidePanelApp() {
                   ))}
                 </div>
               )}
-              <pre style={styles.previewContent}>{previewMarkdown}</pre>
+              <div
+                style={styles.previewContent}
+                className="markdown-body"
+                dangerouslySetInnerHTML={{
+                  __html: renderMarkdown(previewMarkdown),
+                }}
+              />
             </>
           )}
         </div>
@@ -455,7 +598,17 @@ export function SidePanelApp() {
             <div style={styles.messageRole}>
               {msg.role === "user" ? "You" : "AI"}
             </div>
-            <div style={styles.messageContent}>{msg.content}</div>
+            {msg.role === "assistant" ? (
+              <div
+                style={styles.messageContent}
+                className="markdown-body"
+                dangerouslySetInnerHTML={{
+                  __html: renderMarkdown(msg.content),
+                }}
+              />
+            ) : (
+              <div style={styles.messageContent}>{msg.content}</div>
+            )}
           </div>
         ))}
         {loading && (
@@ -546,13 +699,85 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
   },
   title: { margin: 0, fontSize: 16, fontWeight: 600 },
+  headerBtns: { display: "flex", gap: 6 },
   settingsBtn: {
     background: "none",
     border: "1px solid #ccc",
     borderRadius: 4,
-    fontSize: 16,
+    fontSize: 14,
     cursor: "pointer",
     padding: "2px 8px",
+    lineHeight: "20px",
+  },
+  historyPanel: {
+    padding: "8px 16px",
+    borderBottom: "1px solid #e0e0e0",
+    background: "#fafafa",
+    maxHeight: 300,
+    overflow: "auto",
+  },
+  historyTitle: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#888",
+    marginBottom: 8,
+    textTransform: "uppercase" as const,
+  },
+  historyEmpty: {
+    fontSize: 12,
+    color: "#aaa",
+    fontStyle: "italic",
+  },
+  historyItem: {
+    display: "flex",
+    alignItems: "flex-start",
+    padding: "6px 8px",
+    marginBottom: 4,
+    borderRadius: 4,
+    border: "1px solid #eee",
+    background: "#fff",
+  },
+  historyItemMain: {
+    flex: 1,
+    cursor: "pointer",
+    overflow: "hidden",
+  },
+  historyItemTitle: {
+    fontSize: 12,
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  historyItemUrl: {
+    fontSize: 10,
+    color: "#888",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    marginTop: 2,
+  },
+  historyItemMeta: {
+    fontSize: 10,
+    color: "#aaa",
+    marginTop: 2,
+  },
+  historyDelete: {
+    background: "none",
+    border: "none",
+    color: "#ccc",
+    cursor: "pointer",
+    fontSize: 12,
+    padding: "2px 4px",
+    flexShrink: 0,
+  },
+  restoredMsg: {
+    fontSize: 11,
+    color: "#2e7d32",
+    background: "#e8f5e9",
+    padding: "4px 8px",
+    borderRadius: 4,
+    marginBottom: 8,
   },
   settingsPanel: {
     padding: "12px 16px",

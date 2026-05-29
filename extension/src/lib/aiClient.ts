@@ -35,48 +35,71 @@ function buildSystemPrompt(
   return prompt;
 }
 
-// ── Anthropic Messages API ──────────────────────────────────────
+// ── SSE Stream Parser ──────────────────────────────────────────
+
+type SSEHandler = {
+  onData: (data: Record<string, unknown>) => void;
+  onDone: () => void;
+  onError: (err: Error) => void;
+};
+
+async function readSSEStream(res: Response, handler: SSEHandler): Promise<void> {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("Response body is not readable");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      let dataLines: string[] = [];
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") {
+            handler.onDone();
+            return;
+          }
+          dataLines.push(payload);
+        } else if (line === "" && dataLines.length > 0) {
+          try {
+            const json = JSON.parse(dataLines.join("\n"));
+            handler.onData(json);
+          } catch {
+            // skip unparseable chunks
+          }
+          dataLines = [];
+        }
+      }
+    }
+    handler.onDone();
+  } catch (err) {
+    handler.onError(err instanceof Error ? err : new Error(String(err)));
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// ── Anthropic Messages API (streaming) ──────────────────────────
 
 async function callAnthropicAPI(
   systemPrompt: string,
   history: ChatMessage[],
   question: string,
   images: ImageData[],
-  config: AIConfig
+  config: AIConfig,
+  onChunk: (text: string) => void
 ): Promise<string> {
-  // Build user content: images + text
-  const userContent: Record<string, unknown>[] = [];
-
-  let imgIdx = 0;
-  for (const img of images) {
-    if (!img.base64 || !img.mediaType) continue;
-    imgIdx++;
-    userContent.push({
-      type: "text",
-      text: `[Image ${imgIdx}]`,
-    });
-    userContent.push({
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: img.mediaType,
-        data: img.base64,
-      },
-    });
-  }
-
-  const questionText =
-    imgIdx > 0
-      ? `The above ${imgIdx} image(s) (labeled [Image 1] to [Image ${imgIdx}]) are from the current web page. Use them as visual context when answering. You can reference specific images by their number. ${question}`
-      : question;
-
-  userContent.push({ type: "text", text: questionText });
-
+  const userContent = buildUserContent(images, "anthropic", question);
   const messages: Record<string, unknown>[] = [
-    ...history.map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    })),
+    ...history.map((msg) => ({ role: msg.role, content: msg.content })),
     { role: "user", content: userContent },
   ];
 
@@ -93,6 +116,7 @@ async function callAnthropicAPI(
       max_tokens: 4096,
       system: systemPrompt,
       messages,
+      stream: true,
     }),
   });
 
@@ -101,54 +125,45 @@ async function callAnthropicAPI(
     throw apiError(res.status, body);
   }
 
-  const data = await res.json();
-  const texts = (data.content || []).filter(
-    (b: { type: string }) => b.type === "text"
-  );
-  return texts.map((b: { text: string }) => b.text).join("\n") || "";
+  let fullText = "";
+  let hasStreamed = false;
+
+  await readSSEStream(res, {
+    onData(data) {
+      if (data.type === "content_block_delta") {
+        const delta = data.delta as { type?: string; text?: string } | undefined;
+        if (delta?.type === "text_delta" && delta.text) {
+          fullText += delta.text;
+          onChunk(delta.text);
+          hasStreamed = true;
+        }
+      }
+    },
+    onDone() {
+      // stream ended
+    },
+    onError(err) {
+      if (!hasStreamed) throw err;
+    },
+  });
+
+  return fullText;
 }
 
-// ── OpenAI-compatible Chat Completions API ───────────────────────
+// ── OpenAI-compatible Chat Completions API (streaming) ───────────
 
 async function callOpenAIAPI(
   systemPrompt: string,
   history: ChatMessage[],
   question: string,
   images: ImageData[],
-  config: AIConfig
+  config: AIConfig,
+  onChunk: (text: string) => void
 ): Promise<string> {
-  // Build user content: images + text
-  const userContent: Record<string, unknown>[] = [];
-
-  let imgIdx = 0;
-  for (const img of images) {
-    if (!img.base64 || !img.mediaType) continue;
-    imgIdx++;
-    userContent.push({
-      type: "text",
-      text: `[Image ${imgIdx}]`,
-    });
-    userContent.push({
-      type: "image_url",
-      image_url: {
-        url: `data:${img.mediaType};base64,${img.base64}`,
-      },
-    });
-  }
-
-  const questionText =
-    imgIdx > 0
-      ? `The above ${imgIdx} image(s) (labeled [Image 1] to [Image ${imgIdx}]) are from the current web page. Use them as visual context when answering. You can reference specific images by their number. ${question}`
-      : question;
-
-  userContent.push({ type: "text", text: questionText });
-
+  const userContent = buildUserContent(images, "openai", question);
   const messages: Record<string, unknown>[] = [
     { role: "system", content: systemPrompt },
-    ...history.map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    })),
+    ...history.map((msg) => ({ role: msg.role, content: msg.content })),
     { role: "user", content: userContent },
   ];
 
@@ -163,6 +178,7 @@ async function callOpenAIAPI(
       model: config.model,
       max_tokens: 4096,
       messages,
+      stream: true,
     }),
   });
 
@@ -171,11 +187,73 @@ async function callOpenAIAPI(
     throw apiError(res.status, body);
   }
 
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
+  let fullText = "";
+  let hasStreamed = false;
+
+  await readSSEStream(res, {
+    onData(data) {
+      const choices = data.choices as
+        | { delta?: { content?: string }; finish_reason?: string }[]
+        | undefined;
+      const content = choices?.[0]?.delta?.content;
+      if (content) {
+        fullText += content;
+        onChunk(content);
+        hasStreamed = true;
+      }
+    },
+    onDone() {
+      // stream ended
+    },
+    onError(err) {
+      if (!hasStreamed) throw err;
+    },
+  });
+
+  return fullText;
 }
 
-// ── Shared ───────────────────────────────────────────────────────
+// ── Message builders ──────────────────────────────────────────
+
+function buildUserContent(
+  images: ImageData[],
+  format: "anthropic" | "openai",
+  question: string
+): Record<string, unknown>[] {
+  const content: Record<string, unknown>[] = [];
+  let imgIdx = 0;
+
+  for (const img of images) {
+    if (!img.base64 || !img.mediaType) continue;
+    imgIdx++;
+    content.push({ type: "text", text: `[Image ${imgIdx}]` });
+    if (format === "anthropic") {
+      content.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: img.mediaType,
+          data: img.base64,
+        },
+      });
+    } else {
+      content.push({
+        type: "image_url",
+        image_url: { url: `data:${img.mediaType};base64,${img.base64}` },
+      });
+    }
+  }
+
+  const prefix =
+    imgIdx > 0
+      ? `The above ${imgIdx} image(s) (labeled [Image 1] to [Image ${imgIdx}]) are from the current web page. You can reference specific images by their number. `
+      : "";
+
+  content.push({ type: "text", text: prefix + question });
+  return content;
+}
+
+// ── Shared ────────────────────────────────────────────────────
 
 function apiError(status: number, body: string): Error {
   if (status === 401) {
@@ -191,7 +269,6 @@ function apiError(status: number, body: string): Error {
 
 function buildURL(baseURL: string, path: string): string {
   const base = baseURL.replace(/\/+$/, "");
-  // If base already ends with /v1 or /v1beta etc, don't double it
   if (base.endsWith("/v1") || base.endsWith("/v1beta")) {
     return `${base}${path}`;
   }
@@ -204,12 +281,13 @@ export async function callAIDirect(
   question: string,
   config: AIConfig,
   maxContextChars: number,
-  images: ImageData[]
+  images: ImageData[],
+  onChunk: (text: string) => void
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(pageContext, maxContextChars);
 
   if (config.apiFormat === "openai") {
-    return callOpenAIAPI(systemPrompt, messages, question, images, config);
+    return callOpenAIAPI(systemPrompt, messages, question, images, config, onChunk);
   }
-  return callAnthropicAPI(systemPrompt, messages, question, images, config);
+  return callAnthropicAPI(systemPrompt, messages, question, images, config, onChunk);
 }
