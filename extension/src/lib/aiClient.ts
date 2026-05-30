@@ -87,7 +87,7 @@ async function readSSEStream(res: Response, handler: SSEHandler): Promise<void> 
   }
 }
 
-// ── Anthropic Messages API (streaming) ──────────────────────────
+// ── Anthropic Messages API (streaming + prompt caching) ─────────
 
 async function callAnthropicAPI(
   systemPrompt: string,
@@ -97,27 +97,61 @@ async function callAnthropicAPI(
   config: AIConfig,
   onChunk: (text: string) => void
 ): Promise<string> {
-  const userContent = buildUserContent(images, "anthropic", question);
-  const messages: Record<string, unknown>[] = [
-    ...history.map((msg) => ({ role: msg.role, content: msg.content })),
-    { role: "user", content: userContent },
+  // Build system as cacheable blocks
+  const systemBlocks: Record<string, unknown>[] = [
+    { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
   ];
 
+  // Build messages with cache control
+  const messages: Record<string, unknown>[] = [];
+
+  // Cache history except the most recent 2 turns
+  const cacheHistoryCutoff = Math.max(0, history.length - 2);
+  for (let i = 0; i < history.length; i++) {
+    const msg = history[i];
+    const content = msg.content;
+    if (i === cacheHistoryCutoff - 1 && i >= 0) {
+      // Mark the last cached message with cache_control
+      messages.push({
+        role: msg.role,
+        content: [{ type: "text", text: content, cache_control: { type: "ephemeral" } }],
+      });
+    } else {
+      messages.push({ role: msg.role, content });
+    }
+  }
+
+  // Current user message: images cacheable, question not
+  const userContent = buildUserContent(images, "anthropic", question);
+  // Mark the last image (or first text if no images) as the final cache breakpoint
+  let cachedFinal = false;
+  for (let i = userContent.length - 1; i >= 0; i--) {
+    const block = userContent[i];
+    if (!cachedFinal && (block.type === "image" || i === userContent.length - 1)) {
+      userContent[i] = { ...block, cache_control: { type: "ephemeral" } };
+      cachedFinal = true;
+      break;
+    }
+  }
+  messages.push({ role: "user", content: userContent });
+
   const url = buildURL(config.baseURL, "/messages");
+  const body: Record<string, unknown> = {
+    model: config.model,
+    max_tokens: 4096,
+    system: systemBlocks,
+    messages,
+    stream: true,
+  };
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": config.apiKey,
-      "anthropic-version": "2023-06-01",
+      "anthropic-version": "2024-02-15",
     },
-    body: JSON.stringify({
-      model: config.model,
-      max_tokens: 4096,
-      system: systemPrompt,
-      messages,
-      stream: true,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {

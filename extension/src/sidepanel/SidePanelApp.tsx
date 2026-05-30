@@ -12,6 +12,11 @@ import {
   deleteHistory,
   type HistoryEntry,
 } from "../lib/history";
+import {
+  loadPrompts,
+  savePrompts,
+  type SavedPrompt,
+} from "../lib/prompts";
 
 const STORAGE_KEYS = {
   apiKey: "aiPageReader_apiKey",
@@ -114,11 +119,16 @@ export function SidePanelApp() {
   const [showPreview, setShowPreview] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showPrompts, setShowPrompts] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [loadingImages, setLoadingImages] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [historyList, setHistoryList] = useState<HistoryEntry[]>([]);
   const [restoredMsg, setRestoredMsg] = useState("");
+  const [prompts, setPrompts] = useState<SavedPrompt[]>([]);
+  const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
+  const [editPromptTitle, setEditPromptTitle] = useState("");
+  const [editPromptContent, setEditPromptContent] = useState("");
 
   // Config state
   const [apiKey, setApiKey] = useState("");
@@ -306,8 +316,24 @@ export function SidePanelApp() {
         <div style={styles.headerBtns}>
           <button
             onClick={() => {
+              setShowPrompts(!showPrompts);
+              setShowHistory(false);
+              setShowSettings(false);
+              loadPrompts().then(setPrompts);
+            }}
+            style={{
+              ...styles.settingsBtn,
+              background: showPrompts ? "#e3f2fd" : undefined,
+            }}
+            title="Prompt Shortcuts"
+          >
+            📋
+          </button>
+          <button
+            onClick={() => {
               setShowHistory(!showHistory);
               setShowSettings(false);
+              setShowPrompts(false);
               loadAllHistory().then(setHistoryList);
             }}
             style={{
@@ -322,6 +348,7 @@ export function SidePanelApp() {
             onClick={() => {
               setShowSettings(!showSettings);
               setShowHistory(false);
+              setShowPrompts(false);
             }}
             style={{
               ...styles.settingsBtn,
@@ -333,6 +360,123 @@ export function SidePanelApp() {
           </button>
         </div>
       </div>
+
+      {/* Prompt shortcuts panel */}
+      {showPrompts && (
+        <div style={styles.promptPanel}>
+          <div style={styles.promptTitle}>Prompt Shortcuts</div>
+          {prompts.map((prompt) => {
+            const isEditing = editingPromptId === prompt.id;
+            return (
+              <div key={prompt.id} style={styles.promptItem}>
+                {isEditing ? (
+                  <div style={styles.promptEditWrap}>
+                    <input
+                      value={editPromptTitle}
+                      onChange={(e) => setEditPromptTitle(e.target.value)}
+                      style={styles.promptEditTitle}
+                      placeholder="Shortcut name"
+                    />
+                    <textarea
+                      value={editPromptContent}
+                      onChange={(e) => setEditPromptContent(e.target.value)}
+                      style={styles.promptEditContent}
+                      rows={3}
+                      placeholder="Prompt text..."
+                    />
+                    <div style={styles.promptEditBtns}>
+                      <button
+                        onClick={async () => {
+                          const updated = prompts.map((p) =>
+                            p.id === prompt.id
+                              ? {
+                                  ...p,
+                                  title:
+                                    editPromptTitle.trim() || p.title,
+                                  content:
+                                    editPromptContent.trim() || p.content,
+                                }
+                              : p
+                          );
+                          await savePrompts(updated);
+                          setPrompts(updated);
+                          setEditingPromptId(null);
+                        }}
+                        style={styles.promptSaveBtn}
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingPromptId(null)}
+                        style={styles.promptCancelBtn}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      style={styles.promptItemMain}
+                      onClick={() => {
+                        setInput(prompt.content);
+                        setShowPrompts(false);
+                      }}
+                    >
+                      <div style={styles.promptItemTitle}>{prompt.title}</div>
+                      <div style={styles.promptItemPreview}>
+                        {prompt.content.slice(0, 80)}
+                        {prompt.content.length > 80 ? "..." : ""}
+                      </div>
+                    </div>
+                    <div style={styles.promptItemBtns}>
+                      <button
+                        style={styles.promptEditBtn}
+                        onClick={() => {
+                          setEditingPromptId(prompt.id);
+                          setEditPromptTitle(prompt.title);
+                          setEditPromptContent(prompt.content);
+                        }}
+                        title="Edit"
+                      >
+                        ✎
+                      </button>
+                      <button
+                        style={styles.promptDeleteBtn}
+                        onClick={async () => {
+                          const updated = prompts.filter(
+                            (p) => p.id !== prompt.id
+                          );
+                          await savePrompts(updated);
+                          setPrompts(updated);
+                        }}
+                        title="Delete"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+          <button
+            style={styles.promptAddBtn}
+            onClick={async () => {
+              const newPrompt: SavedPrompt = {
+                id: Date.now().toString(),
+                title: "New Prompt",
+                content: "",
+              };
+              const updated = [...prompts, newPrompt];
+              await savePrompts(updated);
+              setPrompts(updated);
+            }}
+          >
+            + Add Prompt
+          </button>
+        </div>
+      )}
 
       {/* History panel */}
       {showHistory && (
@@ -778,6 +922,122 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "4px 8px",
     borderRadius: 4,
     marginBottom: 8,
+  },
+  promptPanel: {
+    padding: "8px 16px",
+    borderBottom: "1px solid #e0e0e0",
+    background: "#fafafa",
+    maxHeight: 320,
+    overflow: "auto",
+  },
+  promptTitle: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#888",
+    marginBottom: 8,
+    textTransform: "uppercase" as const,
+  },
+  promptItem: {
+    display: "flex",
+    alignItems: "flex-start",
+    padding: "6px 8px",
+    marginBottom: 4,
+    borderRadius: 4,
+    border: "1px solid #eee",
+    background: "#fff",
+  },
+  promptItemMain: {
+    flex: 1,
+    cursor: "pointer",
+    overflow: "hidden",
+  },
+  promptItemTitle: {
+    fontSize: 12,
+    fontWeight: 600,
+  },
+  promptItemPreview: {
+    fontSize: 10,
+    color: "#888",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    marginTop: 2,
+  },
+  promptItemBtns: {
+    display: "flex",
+    gap: 2,
+    flexShrink: 0,
+    marginLeft: 6,
+  },
+  promptEditBtn: {
+    background: "none",
+    border: "none",
+    color: "#aaa",
+    cursor: "pointer",
+    fontSize: 12,
+    padding: "2px 4px",
+  },
+  promptDeleteBtn: {
+    background: "none",
+    border: "none",
+    color: "#ccc",
+    cursor: "pointer",
+    fontSize: 12,
+    padding: "2px 4px",
+  },
+  promptEditWrap: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  promptEditTitle: {
+    padding: "3px 6px",
+    fontSize: 12,
+    border: "1px solid #ccc",
+    borderRadius: 3,
+  },
+  promptEditContent: {
+    padding: "4px 6px",
+    fontSize: 11,
+    border: "1px solid #ccc",
+    borderRadius: 3,
+    resize: "vertical",
+    fontFamily: "inherit",
+  },
+  promptEditBtns: {
+    display: "flex",
+    gap: 6,
+    justifyContent: "flex-end",
+  },
+  promptSaveBtn: {
+    padding: "3px 10px",
+    fontSize: 11,
+    background: "#1976d2",
+    color: "#fff",
+    border: "none",
+    borderRadius: 3,
+    cursor: "pointer",
+  },
+  promptCancelBtn: {
+    padding: "3px 8px",
+    fontSize: 11,
+    background: "transparent",
+    color: "#888",
+    border: "1px solid #ccc",
+    borderRadius: 3,
+    cursor: "pointer",
+  },
+  promptAddBtn: {
+    width: "100%",
+    padding: "6px",
+    fontSize: 12,
+    background: "transparent",
+    color: "#1976d2",
+    border: "1px dashed #ccc",
+    borderRadius: 4,
+    cursor: "pointer",
+    marginTop: 4,
   },
   settingsPanel: {
     padding: "12px 16px",

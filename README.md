@@ -10,42 +10,71 @@
 <h3 align="center">Your AI Webpage Assistant</h3>
 
 <p align="center">
-  <strong>边看网页，边问 AI。</strong><br>
-  打开任意网页，在侧边栏中和 AI 一起阅读、提问、理解。<br>
-  支持文字提取、图片识别、对话存档、流式输出。
+  <strong>一键提取，边看边问。</strong><br>
+  告别手动复制粘贴 —— 在 Chrome 侧边栏中和 AI 一起阅读任何网页。<br>
+  支持智能内容提取、图片识别、对话存档、流式输出。
 </p>
 
 ---
 
-## ✨ 亮点
+## 为什么需要 Web Chat？
+
+> *"这篇博客好长，想用 AI 帮我总结，但复制粘贴太累了……"*
+>
+> *"OpenReview 上这篇 rebuttal 的上下文太多，手动选都选不全……"*
+>
+> *"这个网站是用法语写的，我完全看不懂，但又需要理解它的内容……"*
+>
+> *"学长这份实验笔记有几万字，贴到 ChatGPT 里还经常超出长度限制……"*
+
+**这是每个认真阅读网页的人都会遇到的痛点。**
+
+当你面对一个内容密集的网页时，传统的做法是：选中文本 → 复制 → 粘贴到 AI 对话窗口 → 补充说明 → 等待回答。如果还要追问，就得反复复制粘贴。遇到图片、表格，更是无从下手。更糟的是，有些页面结构复杂（学术论坛、实验文档、非母语网站），你甚至不知道哪些内容是关键的。
+
+**Web Chat 彻底改变了这个流程。**
+
+打开网页，点击图标，AI 就在侧边栏里等着你。不用复制粘贴，不用切换窗口，不用反复描述"我正在看这个网页，内容是……"—— 页面内容自动提取，连同图片一起发给 AI。
+
+### 典型场景
+
+| 场景 | 痛点 | Web Chat 的解决方式 |
+|---|---|---|
+| **OpenReview 论文 & Rebuttal** | 正文分散在多个折叠区，reviewer 评论、作者回复互相交织，手动粘贴极易遗漏关键论点 | 一键提取全页，AI 帮你梳理论点脉络、对比各方观点 |
+| **长篇学习笔记 / 实验文档** | 学姐学长的笔记动辄几万字，包含大量上下文和交叉引用，直接贴 AI 会超出长度限制 | 智能截断 + 分段提取，边看边问，AI 始终掌握完整上下文 |
+| **非母语网站** | 内容完全看不懂，即使翻译插件逐段翻译也很费劲，且翻译质量参差不齐 | AI 不仅能翻译，还能用你熟悉的语言解释概念、提炼要点 |
+| **带有图表的文章** | 图表中蕴含大量信息，纯文本提取完全忽略，需要手动截图上传 | 自动采集页面图片，Vision 模型直接识别图表、公式 |
+| **经常回头看的资料页** | 上次已经提问过一轮，重新打开又要从头开始 | 自动存档对话历史，再次访问同一 URL 时一键恢复 |
+
+---
+
+## ✨ 核心能力
 
 <table>
 <tr>
 <td width="50%">
 
-### 精准提取，自由控制
+### 智能提取，告别复制粘贴
 
-四种提取模式随意切换，从算法选优到全文去噪，不同页面选不同策略。
+一次点击，网页正文自动转换为结构化 Markdown 并发送给 AI。四种提取策略覆盖从博客到 SPA 的所有页面类型。
 
-- **Auto** — 智能选择最优策略
-- **Readability** — 博客/新闻精准提取
-- **Full Page** — SPA 页面全文抓取
-- **Plain Text** — 保底纯文本
+- **4 种提取模式** — Auto / Readability / Full Page / Plain Text
+- **Preview 区实时预览** — 字符数一目了然，确认提取完整再提问
+- **Prompt 快捷键** — 常用提问模板一键填入
 
-> *再也不用复制粘贴网页内容了*
+> *从"手动复制 5 分钟"到"点击 1 秒"*
 
 </td>
 <td width="50%">
 
 ### 图片识别，视觉问答
 
-自动采集页面图片，下载转码后发送给 Vision 模型。AI 可以"看懂"图表、截图、公式，回答关于图片内容的问题。
+自动采集页面中的图片，下载转码后发送给 Vision 模型。AI 不仅能读文字，还能"看懂"图表、截图、公式、架构图。
 
-- 自动过滤头像、图标等噪音
-- 缩略图预览 + 点击放大
-- 图片编号，对话中可直接引用 *"Image 2 讲了什么？"*
+- 自动过滤头像、图标等无关小图
+- 缩略图编号预览 + 点击放大
+- 对话中可直接引用 *"Image 2 的表格说明了什么？"*
 
-> *支持 DeepSeek-VL、Qwen-VL、GPT-4V 等视觉模型*
+> *推荐使用 Qwen 3.6 Plus 等多模态模型获得最佳体验*
 
 </td>
 </tr>
@@ -54,30 +83,90 @@
 
 ### 对话存档，随时回顾
 
-每个网页的对话自动保存，再次打开同一页面时一键恢复历史记录。
+每个网页的对话自动按 URL 归档。再次打开同一页面时，历史记录自动恢复，无需从头开始。
 
-- 按 URL 自动归档，无需手动管理
-- 历史面板统一浏览所有保存的对话
-- 切换网页即切换上下文
+- 最多保存 50 个网页的完整对话上下文
+- 历史面板统一浏览，点击即恢复
+- 切换网页自动切换上下文
 
-> *看过的好文章，对话永远不丢*
+> *好文章值得反复读，好对话不该丢*
 
 </td>
 <td width="50%">
 
-### 流式输出，逐字呈现
+### 流式输出，打字机体验
 
-基于 SSE (Server-Sent Events)，AI 的回答像打字一样逐字出现，不用等待完整响应。
+SSE 流式传输，AI 的回答逐字出现在屏幕上，不用等待完整响应 —— 看到第一句话就能开始读。
 
-- 兼容 Anthropic Messages & OpenAI Chat Completions
-- 零配置切换 API 格式
-- 支持任意兼容端点
+- 兼容 Anthropic Messages & OpenAI Chat Completions 两种协议
+- Markdown 渲染（表格、代码块、公式、引用）
+- 支持任意兼容 API 端点（DeepSeek、Qwen、OpenAI、Ollama...）
 
-> *打字机体验，看到第一行就能开始读*
+> *回答到一半就能判断方向对不对*
 
 </td>
 </tr>
 </table>
+
+---
+
+## 产品预览
+
+<p align="center">
+  <img src="assets/read_page.png" alt="Extract Page" width="100%">
+</p>
+
+<p align="center">
+  <em>一键提取页面内容 — Markdown 预览 + 图片缩略图 + 字符数统计</em>
+</p>
+
+<p align="center">
+  <img src="assets/read_page_having_pictures.png" alt="Extract with Images" width="100%">
+</p>
+
+<p align="center">
+  <em>图片采集 — 自动过滤头像/图标，缩略图编号预览，点击放大</em>
+</p>
+
+<p align="center">
+  <img src="assets/answer.png" alt="AI Answer" width="100%">
+</p>
+
+<p align="center">
+  <em>AI 流式回答 — Markdown 实时渲染，支持表格、代码块、标题、引用</em>
+</p>
+
+<p align="center">
+  <img src="assets/settings.png" alt="Settings" width="100%">
+</p>
+
+<p align="center">
+  <em>设置面板 — API Key / Base URL / Model / 提取模式 / API 格式。 设置提取模式后你可以readpage或者refresh page，并在预览部分观察你所需要的内容是否被捕获。max context chars设置了网页内容字符数上限，max images设置了网站图片上传上限.一般来说auto就可以，如果你发现auto模式下你拿不到完整的内容再切换成full page模式重新读取网站。</em>
+</p>
+
+<p align="center">
+  <img src="assets/history.png" alt="History" width="100%">
+</p>
+
+<p align="center">
+  <em>历史面板 — 对话自动按 URL 归档，点击一键恢复</em>
+</p>
+
+<p align="center">
+  <img src="assets/prompt_shortcut.png" alt="Prompt Shortcuts" width="100%">
+</p>
+
+<p align="center">
+  <em>Prompt 快捷键 — 预置常用提问模板，点击即填入输入框</em>
+</p>
+
+
+<p align="center">
+  <img src="assets/guide.gif" alt="Web Chat Demo" width="100%">
+</p>
+<p align="center">
+  <em>完整操作演示：提取页面 → 查看预览 → AI 流式回答 → Markdown 渲染</em>
+</p>
 
 ---
 
