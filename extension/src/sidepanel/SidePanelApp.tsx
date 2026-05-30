@@ -28,87 +28,7 @@ const STORAGE_KEYS = {
   maxImages: "aiPageReader_maxImages",
 };
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB per image
 const DEFAULT_MAX_IMAGES = 5;
-
-const ALLOWED_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-  "image/gif",
-]);
-
-function guessTypeFromURL(url: string): string | null {
-  try {
-    const path = new URL(url).pathname.toLowerCase();
-    if (path.endsWith(".png")) return "image/png";
-    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
-    if (path.endsWith(".webp")) return "image/webp";
-    if (path.endsWith(".gif")) return "image/gif";
-  } catch {
-    // invalid URL
-  }
-  return null;
-}
-
-// Download images and convert to base64.
-// Uses blob.type (browser magic-byte detection) as primary media type —
-// more reliable than Content-Type header which servers may set incorrectly.
-async function downloadImages(
-  urls: { url: string; alt: string }[],
-  maxCount: number
-): Promise<ImageData[]> {
-  const results: ImageData[] = [];
-  for (const { url } of urls) {
-    if (results.length >= maxCount) break;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) continue;
-
-      const blob = await res.blob();
-      if (blob.size > MAX_IMAGE_BYTES || blob.size === 0) continue;
-
-      // Primary: browser-detected type from magic bytes
-      let mediaType = blob.type.toLowerCase();
-
-      // Fallback: Content-Type header
-      if (!ALLOWED_TYPES.has(mediaType)) {
-        const ct = (res.headers.get("content-type") || "")
-          .split(";")[0]
-          .trim()
-          .toLowerCase();
-        if (ALLOWED_TYPES.has(ct)) mediaType = ct;
-      }
-
-      // Fallback: URL extension
-      if (!ALLOWED_TYPES.has(mediaType)) {
-        const guessed = guessTypeFromURL(url);
-        if (guessed) mediaType = guessed;
-      }
-
-      if (!ALLOWED_TYPES.has(mediaType)) continue;
-
-      // Read as base64 data URL, strip the prefix
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result as string;
-          const b64 = result.split(",")[1] || result;
-          resolve(b64);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-      if (!base64 || base64.length < 10) continue;
-
-      results.push({ url, base64, mediaType });
-    } catch {
-      // Skip (CORS, 404, etc.)
-    }
-  }
-  return results;
-}
 
 export function SidePanelApp() {
   const [pageContext, setPageContext] = useState<PageContext | null>(null);
@@ -121,7 +41,6 @@ export function SidePanelApp() {
   const [showHistory, setShowHistory] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
   const [extracting, setExtracting] = useState(false);
-  const [loadingImages, setLoadingImages] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [historyList, setHistoryList] = useState<HistoryEntry[]>([]);
   const [restoredMsg, setRestoredMsg] = useState("");
@@ -222,7 +141,6 @@ export function SidePanelApp() {
     setMessages(newMessages);
 
     setLoading(true);
-    setLoadingImages(true);
 
     // Add a placeholder assistant message that will be filled by streaming
     const assistantPlaceholder: ChatMessage = { role: "assistant", content: "" };
@@ -244,12 +162,14 @@ export function SidePanelApp() {
         );
       }
 
-      // Download images from page
-      const images = await downloadImages(
-        pageContext?.images || [],
-        maxImages
-      );
-      setLoadingImages(false);
+      // Use canvas-encoded images from content script (no CORS, instant)
+      const images: ImageData[] = (pageContext?.encodedImages || [])
+        .slice(0, maxImages)
+        .map((img) => ({
+          url: img.url,
+          base64: img.base64,
+          mediaType: img.mediaType,
+        }));
 
       await callAIDirect(
         truncatedContext,
@@ -282,7 +202,6 @@ export function SidePanelApp() {
       }
     } finally {
       setLoading(false);
-      setLoadingImages(false);
     }
   }, [input, messages, pageContext, maxContextChars, apiKey, baseURL, model, apiFormat, maxImages]);
 
@@ -758,9 +677,7 @@ export function SidePanelApp() {
         {loading && (
           <div style={{ ...styles.message, background: "#f5f5f5" }}>
             <div style={styles.messageRole}>AI</div>
-            <div style={styles.messageContent}>
-              {loadingImages ? "Downloading images..." : "Thinking..."}
-            </div>
+            <div style={styles.messageContent}>Thinking...</div>
           </div>
         )}
         <div ref={chatEndRef} />

@@ -1,6 +1,6 @@
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
-import type { PageContext, ImageInfo } from "./pageTypes";
+import type { PageContext, ImageInfo, EncodedImage } from "./pageTypes";
 
 export interface RawExtract {
   html: string;
@@ -9,6 +9,7 @@ export interface RawExtract {
   bodyText: string;
   mainText: string;
   images: ImageInfo[];
+  encodedImages: EncodedImage[];
 }
 
 export type ExtractMode = "auto" | "readability" | "fullpage" | "plaintext";
@@ -23,7 +24,9 @@ function makeTurndown(): TurndownService {
 export function processRawExtract(raw: RawExtract, mode: ExtractMode): PageContext {
   const mkCtx = (title: string, md: string, text: string, ex?: string, bl?: string): PageContext => ({
     title, url: raw.url, excerpt: ex || "", byline: bl || "",
-    markdown: md, plainText: text, images: raw.images,
+    markdown: md, plainText: text,
+    images: raw.images,
+    encodedImages: raw.encodedImages,
   });
 
   const parser = new DOMParser();

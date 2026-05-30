@@ -7,6 +7,13 @@ export interface ImageInfo {
   height: number;
 }
 
+export interface EncodedImage {
+  url: string;
+  alt: string;
+  base64: string;
+  mediaType: string;
+}
+
 export interface PageContext {
   title: string;
   url: string;
@@ -15,6 +22,7 @@ export interface PageContext {
   markdown: string;
   plainText: string;
   images: ImageInfo[];
+  encodedImages: EncodedImage[];
 }
 
 export interface ChatMessage {
